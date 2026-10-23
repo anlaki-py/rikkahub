@@ -30,7 +30,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "me.rerere.rikkahub"
+        applicationId = "me.rerere.rikkahub.aki"
         minSdk = 26
         targetSdk = 37
         versionCode = configuredVersionCode ?: defaultVersionCode

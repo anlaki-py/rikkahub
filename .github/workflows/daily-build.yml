@@ -90,7 +90,7 @@ jobs:
           test -n "$KEY_ALIAS" || { echo "Missing KEY_ALIAS secret." >&2; exit 1; }
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > app/app.key
           cat > local.properties <<EOF
-          storeFile=app/app.key
+          storeFile=app.key
           storePassword=$KEYSTORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
