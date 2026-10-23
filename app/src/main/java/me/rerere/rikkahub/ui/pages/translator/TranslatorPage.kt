@@ -47,6 +47,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +60,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -352,11 +355,19 @@ private fun ResultCard(
 
             if (hasResult) {
                 SelectionContainer {
-                    MarkdownBlock(
-                        content = text,
-                        style = resultTextStyle,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    CompositionLocalProvider(
+                        LocalLayoutDirection provides if (targetLanguage.language == "ar") {
+                            LayoutDirection.Rtl
+                        } else {
+                            LayoutDirection.Ltr
+                        }
+                    ) {
+                        MarkdownBlock(
+                            content = text,
+                            style = resultTextStyle,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
                 }
             } else if (!translating) {
                 Text(
