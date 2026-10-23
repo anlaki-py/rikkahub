@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
@@ -321,6 +322,9 @@ private fun ResultCard(
     onUseAsInput: () -> Unit,
 ) {
     val hasResult = text.isNotBlank()
+    val resultTextStyle = adaptiveTextStyle(text).copy(
+        textDirection = if (targetLanguage.language == "ar") TextDirection.Rtl else TextDirection.Content,
+    )
     val containerColor by animateColorAsState(
         if (hasResult) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow
     )
@@ -350,7 +354,7 @@ private fun ResultCard(
                 SelectionContainer {
                     MarkdownBlock(
                         content = text,
-                        style = adaptiveTextStyle(text),
+                        style = resultTextStyle,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }

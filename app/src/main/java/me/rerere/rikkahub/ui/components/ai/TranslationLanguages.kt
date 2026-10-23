@@ -17,6 +17,7 @@ val TranslationLanguages: List<Locale> = listOf(
     Locale.GERMAN,
     Locale.ITALIAN,
     Locale.forLanguageTag("es-ES"),
+    Locale.forLanguageTag("ar"),
 )
 
 // 带国旗 emoji 的语言名，Locale.displayName 拿不到 emoji
@@ -31,5 +32,6 @@ fun translationLanguageName(locale: Locale): String = when (locale) {
     Locale.GERMAN -> stringResource(R.string.language_german)
     Locale.ITALIAN -> stringResource(R.string.language_italian)
     Locale.forLanguageTag("es-ES") -> stringResource(R.string.language_spanish)
+    Locale.forLanguageTag("ar") -> stringResource(R.string.language_arabic)
     else -> locale.getDisplayLanguage(LocalLocale.current.platformLocale)
 }
