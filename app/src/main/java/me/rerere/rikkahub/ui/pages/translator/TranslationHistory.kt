@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -26,9 +27,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.LayoutDirection
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.rikkahub.R
@@ -93,6 +97,7 @@ fun TranslationHistoryItem(
     modifier: Modifier = Modifier,
 ) {
     val dismissState = rememberSwipeToDismissBoxState(initialValue = SwipeToDismissBoxValue.Settled)
+    val isArabic = Locale.forLanguageTag(entry.targetLanguage).language == "ar"
 
     // 用 settledValue 而不是 currentValue，后者在动画途中就会变，会把这个 effect 提前取消
     LaunchedEffect(dismissState.settledValue) {
@@ -138,12 +143,19 @@ fun TranslationHistoryItem(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                 )
-                Text(
-                    text = entry.translatedText,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                CompositionLocalProvider(
+                    LocalLayoutDirection provides if (isArabic) LayoutDirection.Rtl else LayoutDirection.Ltr,
+                ) {
+                    Text(
+                        text = entry.translatedText,
+                        style = MaterialTheme.typography.bodyLarge.copy(
+                            textDirection = if (isArabic) TextDirection.Rtl else TextDirection.Content,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Text(
                     text = "${translationLanguageName(Locale.forLanguageTag(entry.targetLanguage))} · " +
                         Instant.ofEpochMilli(entry.createAt).toLocalDateTime(),
