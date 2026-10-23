@@ -538,24 +538,26 @@ private fun CardGroupScope.chatGPTAccountItem(
         },
         headlineContent = { Text(account.credential.email ?: stringResource(R.string.setting_provider_page_signed_in)) },
     )
-    account.usage?.windows?.forEach { window ->
+    val windows = account.usage?.windows.orEmpty().ifEmpty { listOf(null) }
+    windows.forEach { window ->
+        val remaining = window?.let { (100 - it.usedPercent).coerceIn(0.0, 100.0) }
         formItem(
             headlineContent = {
-                val label = window.windowMinutes?.let { "$it min" } ?: "Usage"
-                Text("$label · ${(100 - window.usedPercent).coerceIn(0.0, 100.0).roundToInt()}% left")
+                val label = window?.windowMinutes?.let { "$it min" } ?: "Usage"
+                Text(remaining?.let { "$label · ${it.roundToInt()}% left" } ?: label)
+            },
+            trailingContent = {
+                IconButton(onClick = onRefresh) {
+                    Icon(HugeIcons.Refresh03, contentDescription = "Refresh usage")
+                }
             },
         ) {
             LinearProgressIndicator(
-                progress = { ((100 - window.usedPercent).coerceIn(0.0, 100.0) / 100).toFloat() },
+                progress = { (remaining ?: 0.0).div(100).toFloat() },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
     }
-    item(
-        onClick = onRefresh,
-        leadingContent = { CardGroupIcon(HugeIcons.Refresh03) },
-        headlineContent = { Text("Refresh usage") },
-    )
 }
 
 // 订阅用量：每个窗口一条进度和重置时间
