@@ -365,7 +365,7 @@ class ProviderAccountManager(
         requestedAccountId?.let { requested ->
             return allAccounts.find { it.id == requested }?.credential
         }
-        val accounts = allAccounts.filter(ChatGPTAccount::isAvailable)
+        val accounts = allAccounts.filter { account -> account.isAvailable() }
         if (accounts.isEmpty()) return null
         val startIndex = nextChatGPTAccountIndexes.getOrDefault(id, 0).mod(accounts.size)
         val indexes = accounts.indices.map { offset -> (startIndex + offset).mod(accounts.size) }
@@ -432,8 +432,9 @@ class ProviderAccountManager(
 
     private fun ChatGPTAccount.isAvailable(): Boolean =
         enabled && usage?.limitReached != true && usage?.windows?.any { window ->
+            val resetsAtEpochSeconds = window.resetsAtEpochSeconds
             window.usedPercent >= 100 &&
-                (window.resetsAtEpochSeconds == null || window.resetsAtEpochSeconds * 1_000 > System.currentTimeMillis())
+                (resetsAtEpochSeconds == null || resetsAtEpochSeconds * 1_000 > System.currentTimeMillis())
         } != true
 
     private fun setStatus(providerId: Uuid, status: AccountLoginStatus?) {

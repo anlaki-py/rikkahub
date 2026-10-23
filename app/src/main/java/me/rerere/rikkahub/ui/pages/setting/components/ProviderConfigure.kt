@@ -19,7 +19,6 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -389,7 +388,7 @@ private fun ProviderConfigureAccount(
     CardGroup(title = { Text(stringResource(R.string.setting_provider_page_account)) }) {
         if (provider is ProviderSetting.ChatGPT && provider.allAccounts().isNotEmpty()) {
             provider.allAccounts().forEach { account ->
-                ChatGPTAccountItem(
+                chatGPTAccountItem(
                     account = account,
                     onEnabledChange = { enabled ->
                         scope.launch { accountManager.setChatGPTAccountEnabled(provider.id, account.id, enabled) }
@@ -508,14 +507,13 @@ private fun ProviderConfigureAccount(
     )
 }
 
-@Composable
-private fun CardGroupScope.ChatGPTAccountItem(
+private fun CardGroupScope.chatGPTAccountItem(
     account: me.rerere.ai.provider.ChatGPTAccount,
     onEnabledChange: (Boolean) -> Unit,
     onDelete: () -> Unit,
     onRefresh: () -> Unit,
 ) {
-    formItem(
+    item(
         leadingContent = { CardGroupIcon(HugeIcons.UserCircle) },
         trailingContent = {
             Row {
@@ -539,31 +537,25 @@ private fun CardGroupScope.ChatGPTAccountItem(
             )
         },
         headlineContent = { Text(account.credential.email ?: stringResource(R.string.setting_provider_page_signed_in)) },
-    ) {
-        if (account.usage == null) {
-            Text(
-                text = "Usage has not been checked.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    account.usage?.windows?.forEach { window ->
+        formItem(
+            headlineContent = {
+                val label = window.windowMinutes?.let { "$it min" } ?: "Usage"
+                Text("$label · ${(100 - window.usedPercent).coerceIn(0.0, 100.0).roundToInt()}% left")
+            },
+        ) {
+            LinearProgressIndicator(
+                progress = { ((100 - window.usedPercent).coerceIn(0.0, 100.0) / 100).toFloat() },
+                modifier = Modifier.fillMaxWidth(),
             )
         }
-        account.usage?.windows?.forEach { window ->
-            val remaining = (100 - window.usedPercent).coerceIn(0.0, 100.0)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "${window.windowMinutes?.let { "$it min" } ?: "Usage"} · ${remaining.roundToInt()}% left",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                LinearProgressIndicator(
-                    progress = { (remaining / 100).toFloat() },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
-        TextButton(onClick = onRefresh) {
-            Text("Refresh usage")
-        }
     }
+    item(
+        onClick = onRefresh,
+        leadingContent = { CardGroupIcon(HugeIcons.Refresh03) },
+        headlineContent = { Text("Refresh usage") },
+    )
 }
 
 // 订阅用量：每个窗口一条进度和重置时间
