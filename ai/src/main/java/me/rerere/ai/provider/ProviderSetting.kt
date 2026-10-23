@@ -256,6 +256,11 @@ sealed class ProviderSetting {
         @Transient override val builtIn: Boolean = false,
         @Transient override val description: @Composable (() -> Unit) = {},
         @Transient override val shortDescription: @Composable (() -> Unit) = {},
+        /**
+         * ChatGPT sign-ins available to this provider. [credential] remains for settings written by
+         * older app versions and is folded into this list when the account manager reads it.
+         */
+        val credentials: List<OAuthCredential> = emptyList(),
         override val credential: OAuthCredential? = null,
     ) : Account() {
         override fun withCredential(credential: OAuthCredential?): Account = copy(credential = credential)

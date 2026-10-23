@@ -66,6 +66,7 @@ class ProviderAccountManager(
     )
     private val loginJobs = ConcurrentHashMap<Uuid, Job>()
     private val refreshLocks = ConcurrentHashMap<Uuid, Mutex>()
+    private val nextChatGPTAccountIndexes = ConcurrentHashMap<Uuid, Int>()
 
     private val _loginStatus = MutableStateFlow<Map<Uuid, AccountLoginStatus>>(emptyMap())
     val loginStatus: StateFlow<Map<Uuid, AccountLoginStatus>> = _loginStatus.asStateFlow()
@@ -80,7 +81,7 @@ class ProviderAccountManager(
                     is ProviderSetting.ChatGPT -> loginChatGPT(context.applicationContext)
                     is ProviderSetting.Grok -> loginGrok(providerId, context.applicationContext)
                 }
-                persistCredential(providerId, credential)
+                persistLogin(providerId, credential)
                 setStatus(providerId, null)
             } catch (e: CancellationException) {
                 throw e
@@ -103,6 +104,7 @@ class ProviderAccountManager(
 
     suspend fun logout(providerId: Uuid) {
         cancelLogin(providerId)
+        nextChatGPTAccountIndexes.remove(providerId)
         persistCredential(providerId, null)
     }
 
@@ -115,11 +117,12 @@ class ProviderAccountManager(
         rejectedAccessToken: String?,
     ): OAuthCredential {
         // 绝大多数请求的 token 都还有效，直接返回，不用切线程排队拿锁
-        findAccount(setting.id)?.credential
-            ?.takeUnless { it.needsRefresh(rejectedAccessToken) }
-            ?.let { return it }
+        val latest = findAccount(setting.id) ?: setting
+        val credential = latest.selectCredential(rejectedAccessToken)
+            ?: error("${latest.name}: not signed in")
+        if (!credential.needsRefresh(rejectedAccessToken)) return credential
         return appScope.async(Dispatchers.IO) {
-            refreshIfNeeded(setting, rejectedAccessToken)
+            refreshIfNeeded(latest, credential, rejectedAccessToken)
         }.await()
     }
 
@@ -128,12 +131,14 @@ class ProviderAccountManager(
      */
     private suspend fun refreshIfNeeded(
         setting: ProviderSetting.Account,
+        selectedCredential: OAuthCredential,
         rejectedAccessToken: String?,
     ): OAuthCredential {
         val lock = refreshLocks.computeIfAbsent(setting.id) { Mutex() }
         return lock.withLock {
             val latest = findAccount(setting.id) ?: setting
-            val credential = latest.credential ?: error("${latest.name}: not signed in")
+            val credential = latest.findCredential(selectedCredential)
+                ?: error("${latest.name}: sign-in changed during refresh, please try again")
             if (!credential.needsRefresh(rejectedAccessToken)) return@withLock credential
 
             val refreshToken = credential.refreshToken
@@ -240,10 +245,34 @@ class ProviderAccountManager(
         settingsStore.update { old ->
             old.copy(
                 providers = old.providers.map { provider ->
-                    if (provider.id == providerId && provider is ProviderSetting.Account) {
-                        provider.withCredential(credential)
-                    } else {
-                        provider
+                    when {
+                        provider.id != providerId -> provider
+                        provider is ProviderSetting.ChatGPT && credential == null -> provider.copy(
+                            credentials = emptyList(),
+                            credential = null,
+                        )
+
+                        provider is ProviderSetting.Account -> provider.withCredential(credential)
+                        else -> provider
+                    }
+                }
+            )
+        }
+    }
+
+    private suspend fun persistLogin(providerId: Uuid, credential: OAuthCredential) {
+        settingsStore.update { old ->
+            old.copy(
+                providers = old.providers.map { provider ->
+                    when {
+                        provider.id != providerId -> provider
+                        provider is ProviderSetting.ChatGPT -> provider.copy(
+                            credentials = provider.allCredentials().replaceByAccountId(credential),
+                            credential = credential,
+                        )
+
+                        provider is ProviderSetting.Account -> provider.withCredential(credential)
+                        else -> provider
                     }
                 }
             )
@@ -261,9 +290,16 @@ class ProviderAccountManager(
             old.copy(
                 providers = old.providers.map { provider ->
                     if (provider.id == providerId && provider is ProviderSetting.Account &&
-                        provider.credential == expected) {
+                        provider.hasCredential(expected)) {
                         replaced = true
-                        provider.withCredential(credential)
+                        when (provider) {
+                            is ProviderSetting.ChatGPT -> provider.copy(
+                                credentials = provider.allCredentials().replaceByAccountId(credential),
+                                credential = credential,
+                            )
+
+                            else -> provider.withCredential(credential)
+                        }
                     } else {
                         provider
                     }
@@ -282,6 +318,39 @@ class ProviderAccountManager(
         settingsStore.settingsFlow.value.providers
             .find { it.id == providerId } as? ProviderSetting.Account
 
+    private fun ProviderSetting.Account.selectCredential(rejectedAccessToken: String?): OAuthCredential? {
+        if (this !is ProviderSetting.ChatGPT) return credential
+        val accounts = allCredentials()
+        if (accounts.isEmpty()) return null
+        val startIndex = nextChatGPTAccountIndexes.getOrDefault(id, 0).mod(accounts.size)
+        val indexes = accounts.indices.map { offset -> (startIndex + offset).mod(accounts.size) }
+        val index = if (rejectedAccessToken == null) {
+            indexes.first()
+        } else {
+            indexes.firstOrNull { accounts[it].accessToken != rejectedAccessToken } ?: return null
+        }
+        nextChatGPTAccountIndexes[id] = (index + 1).mod(accounts.size)
+        return accounts[index]
+    }
+
+    private fun ProviderSetting.ChatGPT.allCredentials(): List<OAuthCredential> =
+        (credentials + listOfNotNull(credential)).distinctBy { it.accountId ?: it.email ?: it.accessToken }
+
+    private fun ProviderSetting.Account.hasCredential(expected: OAuthCredential): Boolean = when (this) {
+        is ProviderSetting.ChatGPT -> allCredentials().contains(expected)
+        else -> credential == expected
+    }
+
+    private fun ProviderSetting.Account.findCredential(selected: OAuthCredential): OAuthCredential? = when (this) {
+        is ProviderSetting.ChatGPT -> allCredentials().find { it == selected }
+        else -> credential?.takeIf { it == selected }
+    }
+
+    private fun List<OAuthCredential>.replaceByAccountId(credential: OAuthCredential): List<OAuthCredential> {
+        val key = credential.accountId ?: credential.email ?: credential.accessToken
+        return filterNot { (it.accountId ?: it.email ?: it.accessToken) == key } + credential
+    }
+
     private fun setStatus(providerId: Uuid, status: AccountLoginStatus?) {
         _loginStatus.update { if (status == null) it - providerId else it + (providerId to status) }
     }
@@ -292,8 +361,12 @@ class ProviderAccountManager(
  * 编辑期间后台可能已经刷新过 token，旧凭据写回会把轮换后的 refresh token 覆盖掉。
  */
 fun ProviderSetting.preserveCredential(latest: ProviderSetting): ProviderSetting =
-    if (this is ProviderSetting.Account && latest is ProviderSetting.Account) {
-        withCredential(latest.credential)
-    } else {
-        this
+    when {
+        this is ProviderSetting.ChatGPT && latest is ProviderSetting.ChatGPT -> copy(
+            credentials = latest.credentials,
+            credential = latest.credential,
+        )
+
+        this is ProviderSetting.Account && latest is ProviderSetting.Account -> withCredential(latest.credential)
+        else -> this
     }

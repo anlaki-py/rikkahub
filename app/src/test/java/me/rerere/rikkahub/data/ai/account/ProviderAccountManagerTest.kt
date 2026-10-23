@@ -129,4 +129,22 @@ class ProviderAccountManagerTest {
         assertTrue(caller.await().isFailure)
         assertNull(store.credential())
     }
+
+    @Test
+    fun `ChatGPT accounts rotate in order`() = runBlocking {
+        val first = OAuthCredential(accessToken = "first", accountId = "first-account")
+        val second = OAuthCredential(accessToken = "second", accountId = "second-account")
+        val accounts = ProviderSetting.ChatGPT(credentials = listOf(first, second))
+        val store = SettingsStore(
+            PreferenceDataStoreFactory.create(scope = storeScope) { File(temp.root, "rotation.preferences_pb") },
+            storeScope,
+        )
+        store.awaitLoaded()
+        store.update { it.copy(providers = it.providers + accounts) }
+        val manager = ProviderAccountManager(store, appScope, client)
+
+        assertEquals("first", manager.getCredential(accounts, rejectedAccessToken = null).accessToken)
+        assertEquals("second", manager.getCredential(accounts, rejectedAccessToken = null).accessToken)
+        assertEquals("first", manager.getCredential(accounts, rejectedAccessToken = null).accessToken)
+    }
 }

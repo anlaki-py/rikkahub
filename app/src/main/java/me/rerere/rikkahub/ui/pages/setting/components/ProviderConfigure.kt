@@ -383,7 +383,15 @@ private fun ProviderConfigureAccount(
         if (credential != null) {
             item(
                 leadingContent = { CardGroupIcon(HugeIcons.UserCircle) },
-                supportingContent = plan?.let { { Text(it) } },
+                supportingContent = {
+                    val accounts = (provider as? ProviderSetting.ChatGPT)?.credentials?.size ?: 1
+                    Text(
+                        listOfNotNull(
+                            plan,
+                            if (accounts > 1) "$accounts accounts rotate automatically" else null,
+                        ).joinToString(" · ")
+                    )
+                },
                 headlineContent = { Text(credential.email ?: stringResource(R.string.setting_provider_page_signed_in)) },
             )
             item(
@@ -395,8 +403,25 @@ private fun ProviderConfigureAccount(
                         contentColor = MaterialTheme.colorScheme.onErrorContainer,
                     )
                 },
-                headlineContent = { Text(stringResource(R.string.setting_provider_page_sign_out)) },
+                headlineContent = {
+                    Text(
+                        if (provider is ProviderSetting.ChatGPT && provider.credentials.size > 1) {
+                            "Remove all accounts"
+                        } else {
+                            stringResource(R.string.setting_provider_page_sign_out)
+                        }
+                    )
+                },
             )
+            if (provider is ProviderSetting.ChatGPT) {
+                item(
+                    onClick = { accountManager.startLogin(provider.id, context) },
+                    leadingContent = { CardGroupIcon(HugeIcons.Login03) },
+                    supportingContent = { Text("Requests rotate between signed-in accounts.") },
+                    trailingContent = { Icon(HugeIcons.ArrowRight01, contentDescription = null) },
+                    headlineContent = { Text("Add another account") },
+                )
+            }
         } else if (status is AccountLoginStatus.DeviceCode) {
             item(
                 onClick = { CustomTabsOAuthAuthorizationLauncher.launch(context, status.verificationUrl) },
