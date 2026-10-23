@@ -4,13 +4,20 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.io.FileInputStream
 import java.util.Properties
 
+val defaultVersionCode = 193
+val defaultVersionName = "3.1.0"
+val configuredVersionCode = providers.gradleProperty("versionCode").orNull?.let { value ->
+    value.toIntOrNull() ?: throw GradleException("versionCode must be an integer, but was '$value'.")
+}
+val configuredVersionName = providers.gradleProperty("versionName").orNull?.also { value ->
+    require(value.isNotBlank()) { "versionName must not be blank." }
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
-    alias(libs.plugins.google.services)
-    alias(libs.plugins.firebase.crashlytics)
     alias(libs.plugins.baselineprofile)
 }
 
@@ -26,8 +33,8 @@ android {
         applicationId = "me.rerere.rikkahub"
         minSdk = 26
         targetSdk = 37
-        versionCode = 193
-        versionName = "3.1.0"
+        versionCode = configuredVersionCode ?: defaultVersionCode
+        versionName = configuredVersionName ?: defaultVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -219,11 +226,6 @@ dependencies {
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.material3.adaptive.navigation3)
-
-    // Firebase
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.analytics)
-    implementation(libs.firebase.crashlytics)
 
     // DataStore
     implementation(libs.androidx.datastore.preferences)
