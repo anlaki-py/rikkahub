@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -13,10 +14,12 @@ import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ProgressIndicatorDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,7 +37,9 @@ import me.rerere.ui.toast.ToastType
 import me.rerere.ai.provider.ClaudePromptCacheTtl
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.ProviderQuota
+import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.UsageWindow
+import me.rerere.ai.provider.allAccounts
 import me.rerere.ai.provider.supportsQuota
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.account.AccountLoginStatus
@@ -53,6 +58,7 @@ import me.rerere.hugeicons.stroke.Refresh03
 import me.rerere.hugeicons.stroke.UserCircle
 import me.rerere.hugeicons.stroke.View
 import me.rerere.hugeicons.stroke.ViewOff
+import me.rerere.hugeicons.stroke.Delete02
 import me.rerere.rikkahub.ui.components.ai.longLabel
 import me.rerere.rikkahub.ui.components.ai.rememberProviderQuota
 import me.rerere.rikkahub.ui.components.ui.CardGroup
@@ -371,6 +377,7 @@ private fun ProviderConfigureAccount(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val accountManager = koinInject<ProviderAccountManager>()
+    val providerManager = koinInject<ProviderManager>()
     val loginStatus by accountManager.loginStatus.collectAsStateWithLifecycle()
     val status = loginStatus[provider.id]
     val credential = provider.credential
@@ -380,7 +387,44 @@ private fun ProviderConfigureAccount(
     }
 
     CardGroup(title = { Text(stringResource(R.string.setting_provider_page_account)) }) {
-        if (credential != null) {
+        if (provider is ProviderSetting.ChatGPT && provider.allAccounts().isNotEmpty()) {
+            provider.allAccounts().forEach { account ->
+                ChatGPTAccountItem(
+                    account = account,
+                    onEnabledChange = { enabled ->
+                        scope.launch { accountManager.setChatGPTAccountEnabled(provider.id, account.id, enabled) }
+                    },
+                    onDelete = {
+                        scope.launch { accountManager.deleteChatGPTAccount(provider.id, account.id) }
+                    },
+                    onRefresh = {
+                        scope.launch {
+                            runCatching {
+                                providerManager.getProviderByType(provider)
+                                    .getQuota(provider.copy(requestedAccountId = account.id))
+                                    .let { it as? ProviderQuota.UsageLimits ?: error("Usage is not available") }
+                                    .also { accountManager.updateChatGPTUsage(provider.id, account.id, it) }
+                            }
+                        }
+                    },
+                )
+            }
+            item(
+                onClick = { accountManager.startLogin(provider.id, context) },
+                leadingContent = { CardGroupIcon(HugeIcons.Login03) },
+                supportingContent = { Text("Requests rotate between enabled accounts.") },
+                trailingContent = { Icon(HugeIcons.ArrowRight01, contentDescription = null) },
+                headlineContent = { Text("Add another account") },
+            )
+            if (status is AccountLoginStatus.Authorizing) {
+                item(
+                    onClick = { accountManager.cancelLogin(provider.id) },
+                    leadingContent = { ContainedLoadingIndicator(modifier = Modifier.size(40.dp)) },
+                    supportingContent = { Text(stringResource(R.string.setting_provider_page_waiting_authorization_desc)) },
+                    headlineContent = { Text(stringResource(R.string.setting_provider_page_waiting_authorization)) },
+                )
+            }
+        } else if (credential != null) {
             item(
                 leadingContent = { CardGroupIcon(HugeIcons.UserCircle) },
                 supportingContent = {
@@ -413,15 +457,6 @@ private fun ProviderConfigureAccount(
                     )
                 },
             )
-            if (provider is ProviderSetting.ChatGPT) {
-                item(
-                    onClick = { accountManager.startLogin(provider.id, context) },
-                    leadingContent = { CardGroupIcon(HugeIcons.Login03) },
-                    supportingContent = { Text("Requests rotate between signed-in accounts.") },
-                    trailingContent = { Icon(HugeIcons.ArrowRight01, contentDescription = null) },
-                    headlineContent = { Text("Add another account") },
-                )
-            }
         } else if (status is AccountLoginStatus.DeviceCode) {
             item(
                 onClick = { CustomTabsOAuthAuthorizationLauncher.launch(context, status.verificationUrl) },
@@ -461,7 +496,7 @@ private fun ProviderConfigureAccount(
         }
     }
 
-    if (provider.supportsQuota) {
+    if (provider !is ProviderSetting.ChatGPT && provider.supportsQuota) {
         AccountUsage(provider)
     }
 
@@ -471,6 +506,64 @@ private fun ProviderConfigureAccount(
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(horizontal = 4.dp),
     )
+}
+
+@Composable
+private fun CardGroupScope.ChatGPTAccountItem(
+    account: me.rerere.ai.provider.ChatGPTAccount,
+    onEnabledChange: (Boolean) -> Unit,
+    onDelete: () -> Unit,
+    onRefresh: () -> Unit,
+) {
+    formItem(
+        leadingContent = { CardGroupIcon(HugeIcons.UserCircle) },
+        trailingContent = {
+            Row {
+                androidx.compose.material3.Switch(
+                    checked = account.enabled,
+                    onCheckedChange = onEnabledChange,
+                )
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        HugeIcons.Delete02,
+                        contentDescription = stringResource(R.string.delete),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        supportingContent = {
+            Text(
+                account.credential.plan?.let { "ChatGPT ${ChatGPTAuth.planDisplayName(it)}" }
+                    ?: if (account.enabled) "Enabled" else "Disabled"
+            )
+        },
+        headlineContent = { Text(account.credential.email ?: stringResource(R.string.setting_provider_page_signed_in)) },
+    ) {
+        if (account.usage == null) {
+            Text(
+                text = "Usage has not been checked.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        account.usage?.windows?.forEach { window ->
+            val remaining = (100 - window.usedPercent).coerceIn(0.0, 100.0)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "${window.windowMinutes?.let { "$it min" } ?: "Usage"} · ${remaining.roundToInt()}% left",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                LinearProgressIndicator(
+                    progress = { (remaining / 100).toFloat() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        TextButton(onClick = onRefresh) {
+            Text("Refresh usage")
+        }
+    }
 }
 
 // 订阅用量：每个窗口一条进度和重置时间

@@ -27,6 +27,37 @@ data class OAuthCredential(
 }
 
 @Serializable
+data class ChatGPTAccount(
+    val id: String,
+    val credential: OAuthCredential,
+    val enabled: Boolean = true,
+    val usage: ChatGPTUsageSnapshot? = null,
+)
+
+@Serializable
+data class ChatGPTUsageSnapshot(
+    val windows: List<ChatGPTUsageWindow> = emptyList(),
+    val limitReached: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis(),
+)
+
+@Serializable
+data class ChatGPTUsageWindow(
+    val usedPercent: Double,
+    val windowMinutes: Int? = null,
+    val resetsAtEpochSeconds: Long? = null,
+)
+
+fun ProviderSetting.ChatGPT.allAccounts(): List<ChatGPTAccount> =
+    (accounts + credentials.map(::chatGPTAccount) + listOfNotNull(credential).map(::chatGPTAccount))
+        .distinctBy(ChatGPTAccount::id)
+
+private fun chatGPTAccount(credential: OAuthCredential): ChatGPTAccount = ChatGPTAccount(
+    id = credential.accountId ?: credential.email ?: credential.accessToken,
+    credential = credential,
+)
+
+@Serializable
 enum class ClaudePromptCacheTtl(val apiValue: String?) {
     @SerialName("5m")
     FIVE_MINUTES(null),
@@ -256,12 +287,13 @@ sealed class ProviderSetting {
         @Transient override val builtIn: Boolean = false,
         @Transient override val description: @Composable (() -> Unit) = {},
         @Transient override val shortDescription: @Composable (() -> Unit) = {},
-        /**
-         * ChatGPT sign-ins available to this provider. [credential] remains for settings written by
-         * older app versions and is folded into this list when the account manager reads it.
-         */
+        /** Sign-ins and their state. This is serialized with provider settings and backups. */
+        val accounts: List<ChatGPTAccount> = emptyList(),
+        /** Kept to migrate settings written before multi-account support. */
         val credentials: List<OAuthCredential> = emptyList(),
         override val credential: OAuthCredential? = null,
+        /** Used only while fetching quota for one account. It is never persisted. */
+        @Transient val requestedAccountId: String? = null,
     ) : Account() {
         override fun withCredential(credential: OAuthCredential?): Account = copy(credential = credential)
 

@@ -14,6 +14,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import me.rerere.ai.provider.OAuthCredential
+import me.rerere.ai.provider.ChatGPTAccount
+import me.rerere.ai.provider.ChatGPTUsageSnapshot
+import me.rerere.ai.provider.ChatGPTUsageWindow
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -146,5 +149,54 @@ class ProviderAccountManagerTest {
         assertEquals("first", manager.getCredential(accounts, rejectedAccessToken = null).accessToken)
         assertEquals("second", manager.getCredential(accounts, rejectedAccessToken = null).accessToken)
         assertEquals("first", manager.getCredential(accounts, rejectedAccessToken = null).accessToken)
+    }
+
+    @Test
+    fun `disabled ChatGPT accounts are skipped`() = runBlocking {
+        val disabled = OAuthCredential(accessToken = "disabled", accountId = "disabled-account")
+        val available = OAuthCredential(accessToken = "available", accountId = "available-account")
+        val accounts = ProviderSetting.ChatGPT(
+            accounts = listOf(
+                ChatGPTAccount(id = "disabled-account", credential = disabled, enabled = false),
+                ChatGPTAccount(id = "available-account", credential = available),
+            ),
+        )
+        val store = SettingsStore(
+            PreferenceDataStoreFactory.create(scope = storeScope) { File(temp.root, "disabled.preferences_pb") },
+            storeScope,
+        )
+        store.awaitLoaded()
+        store.update { it.copy(providers = it.providers + accounts) }
+        val manager = ProviderAccountManager(store, appScope, client)
+
+        assertEquals("available", manager.getCredential(accounts, rejectedAccessToken = null).accessToken)
+    }
+
+    @Test
+    fun `exhausted ChatGPT accounts are skipped until reset`() = runBlocking {
+        val exhausted = OAuthCredential(accessToken = "exhausted", accountId = "exhausted-account")
+        val available = OAuthCredential(accessToken = "available", accountId = "available-account")
+        val accounts = ProviderSetting.ChatGPT(
+            accounts = listOf(
+                ChatGPTAccount(
+                    id = "exhausted-account",
+                    credential = exhausted,
+                    usage = ChatGPTUsageSnapshot(
+                        limitReached = true,
+                        windows = listOf(ChatGPTUsageWindow(usedPercent = 100.0, resetsAtEpochSeconds = Long.MAX_VALUE)),
+                    ),
+                ),
+                ChatGPTAccount(id = "available-account", credential = available),
+            ),
+        )
+        val store = SettingsStore(
+            PreferenceDataStoreFactory.create(scope = storeScope) { File(temp.root, "exhausted.preferences_pb") },
+            storeScope,
+        )
+        store.awaitLoaded()
+        store.update { it.copy(providers = it.providers + accounts) }
+        val manager = ProviderAccountManager(store, appScope, client)
+
+        assertEquals("available", manager.getCredential(accounts, rejectedAccessToken = null).accessToken)
     }
 }

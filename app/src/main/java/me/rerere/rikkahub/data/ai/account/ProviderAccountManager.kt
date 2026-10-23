@@ -17,8 +17,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.provider.AccountCredentialProvider
+import me.rerere.ai.provider.ChatGPTAccount
+import me.rerere.ai.provider.ChatGPTUsageSnapshot
+import me.rerere.ai.provider.ChatGPTUsageWindow
 import me.rerere.ai.provider.OAuthCredential
+import me.rerere.ai.provider.ProviderQuota
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.allAccounts
 import me.rerere.common.http.await
 import me.rerere.oauth.CustomTabsOAuthAuthorizationLauncher
 import me.rerere.oauth.OAuthHttpClient
@@ -108,6 +113,33 @@ class ProviderAccountManager(
         persistCredential(providerId, null)
     }
 
+    suspend fun setChatGPTAccountEnabled(providerId: Uuid, accountId: String, enabled: Boolean) {
+        settingsStore.update { old ->
+            old.copy(providers = old.providers.map { provider ->
+                if (provider.id == providerId && provider is ProviderSetting.ChatGPT) {
+                    provider.copy(accounts = provider.allAccounts().map { account ->
+                        if (account.id == accountId) account.copy(enabled = enabled) else account
+                    })
+                } else provider
+            })
+        }
+    }
+
+    suspend fun deleteChatGPTAccount(providerId: Uuid, accountId: String) {
+        settingsStore.update { old ->
+            old.copy(providers = old.providers.map { provider ->
+                if (provider.id == providerId && provider is ProviderSetting.ChatGPT) {
+                    val accounts = provider.allAccounts().filterNot { it.id == accountId }
+                    provider.copy(
+                        accounts = accounts,
+                        credentials = emptyList(),
+                        credential = accounts.firstOrNull()?.credential,
+                    )
+                } else provider
+            })
+        }
+    }
+
     /**
      * 需要刷新时在 [appScope] 里执行，调用方被取消（停止生成、关掉额度界面）时打断不了已经发出的刷新：
      * 服务端一收到请求就会轮换 refresh token，新的没存下来就只能重新登录。
@@ -118,7 +150,10 @@ class ProviderAccountManager(
     ): OAuthCredential {
         // 绝大多数请求的 token 都还有效，直接返回，不用切线程排队拿锁
         val latest = findAccount(setting.id) ?: setting
-        val credential = latest.selectCredential(rejectedAccessToken)
+        val credential = latest.selectCredential(
+            rejectedAccessToken,
+            (setting as? ProviderSetting.ChatGPT)?.requestedAccountId,
+        )
             ?: error("${latest.name}: not signed in")
         if (!credential.needsRefresh(rejectedAccessToken)) return credential
         return appScope.async(Dispatchers.IO) {
@@ -248,6 +283,7 @@ class ProviderAccountManager(
                     when {
                         provider.id != providerId -> provider
                         provider is ProviderSetting.ChatGPT && credential == null -> provider.copy(
+                            accounts = emptyList(),
                             credentials = emptyList(),
                             credential = null,
                         )
@@ -267,7 +303,8 @@ class ProviderAccountManager(
                     when {
                         provider.id != providerId -> provider
                         provider is ProviderSetting.ChatGPT -> provider.copy(
-                            credentials = provider.allCredentials().replaceByAccountId(credential),
+                            accounts = provider.allAccounts().replaceByAccountId(credential, preserveState = true),
+                            credentials = emptyList(),
                             credential = credential,
                         )
 
@@ -294,7 +331,8 @@ class ProviderAccountManager(
                         replaced = true
                         when (provider) {
                             is ProviderSetting.ChatGPT -> provider.copy(
-                                credentials = provider.allCredentials().replaceByAccountId(credential),
+                                accounts = provider.allAccounts().replaceByAccountId(credential, preserveState = true),
+                                credentials = emptyList(),
                                 credential = credential,
                             )
 
@@ -318,38 +356,85 @@ class ProviderAccountManager(
         settingsStore.settingsFlow.value.providers
             .find { it.id == providerId } as? ProviderSetting.Account
 
-    private fun ProviderSetting.Account.selectCredential(rejectedAccessToken: String?): OAuthCredential? {
+    private fun ProviderSetting.Account.selectCredential(
+        rejectedAccessToken: String?,
+        requestedAccountId: String? = null,
+    ): OAuthCredential? {
         if (this !is ProviderSetting.ChatGPT) return credential
-        val accounts = allCredentials()
+        val allAccounts = allAccounts()
+        requestedAccountId?.let { requested ->
+            return allAccounts.find { it.id == requested }?.credential
+        }
+        val accounts = allAccounts.filter(ChatGPTAccount::isAvailable)
         if (accounts.isEmpty()) return null
         val startIndex = nextChatGPTAccountIndexes.getOrDefault(id, 0).mod(accounts.size)
         val indexes = accounts.indices.map { offset -> (startIndex + offset).mod(accounts.size) }
         val index = if (rejectedAccessToken == null) {
             indexes.first()
         } else {
-            indexes.firstOrNull { accounts[it].accessToken != rejectedAccessToken } ?: return null
+            indexes.firstOrNull { accounts[it].credential.accessToken != rejectedAccessToken }
+                ?: accounts.indices.singleOrNull()
+                ?: return null
         }
         nextChatGPTAccountIndexes[id] = (index + 1).mod(accounts.size)
-        return accounts[index]
+        return accounts[index].credential
     }
 
-    private fun ProviderSetting.ChatGPT.allCredentials(): List<OAuthCredential> =
-        (credentials + listOfNotNull(credential)).distinctBy { it.accountId ?: it.email ?: it.accessToken }
-
     private fun ProviderSetting.Account.hasCredential(expected: OAuthCredential): Boolean = when (this) {
-        is ProviderSetting.ChatGPT -> allCredentials().contains(expected)
+        is ProviderSetting.ChatGPT -> allAccounts().any { it.credential == expected }
         else -> credential == expected
     }
 
     private fun ProviderSetting.Account.findCredential(selected: OAuthCredential): OAuthCredential? = when (this) {
-        is ProviderSetting.ChatGPT -> allCredentials().find { it == selected }
+        is ProviderSetting.ChatGPT -> allAccounts().find { it.credential == selected }?.credential
         else -> credential?.takeIf { it == selected }
     }
 
-    private fun List<OAuthCredential>.replaceByAccountId(credential: OAuthCredential): List<OAuthCredential> {
+    private fun List<ChatGPTAccount>.replaceByAccountId(
+        credential: OAuthCredential,
+        preserveState: Boolean = false,
+    ): List<ChatGPTAccount> {
         val key = credential.accountId ?: credential.email ?: credential.accessToken
-        return filterNot { (it.accountId ?: it.email ?: it.accessToken) == key } + credential
+        val previous = firstOrNull { it.id == key }
+        return filterNot { it.id == key } + ChatGPTAccount(
+            id = key,
+            credential = credential,
+            enabled = previous?.enabled ?: true,
+            usage = if (preserveState) previous?.usage else null,
+        )
     }
+
+    suspend fun updateChatGPTUsage(
+        providerId: Uuid,
+        accountId: String,
+        quota: ProviderQuota.UsageLimits,
+    ) {
+        val usage = ChatGPTUsageSnapshot(
+            windows = quota.windows.map { window ->
+                ChatGPTUsageWindow(
+                    usedPercent = window.usedPercent,
+                    windowMinutes = window.windowMinutes,
+                    resetsAtEpochSeconds = window.resetsAt?.epochSeconds,
+                )
+            },
+            limitReached = quota.limitReached,
+        )
+        settingsStore.update { old ->
+            old.copy(providers = old.providers.map { provider ->
+                if (provider.id == providerId && provider is ProviderSetting.ChatGPT) {
+                    provider.copy(accounts = provider.allAccounts().map { account ->
+                        if (account.id == accountId) account.copy(usage = usage) else account
+                    })
+                } else provider
+            })
+        }
+    }
+
+    private fun ChatGPTAccount.isAvailable(): Boolean =
+        enabled && usage?.limitReached != true && usage?.windows?.any { window ->
+            window.usedPercent >= 100 &&
+                (window.resetsAtEpochSeconds == null || window.resetsAtEpochSeconds * 1_000 > System.currentTimeMillis())
+        } != true
 
     private fun setStatus(providerId: Uuid, status: AccountLoginStatus?) {
         _loginStatus.update { if (status == null) it - providerId else it + (providerId to status) }
@@ -363,6 +448,7 @@ class ProviderAccountManager(
 fun ProviderSetting.preserveCredential(latest: ProviderSetting): ProviderSetting =
     when {
         this is ProviderSetting.ChatGPT && latest is ProviderSetting.ChatGPT -> copy(
+            accounts = latest.accounts,
             credentials = latest.credentials,
             credential = latest.credential,
         )
