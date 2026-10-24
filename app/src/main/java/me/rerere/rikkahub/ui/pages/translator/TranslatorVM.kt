@@ -47,16 +47,9 @@ class TranslatorVM(
     val translatedText: StateFlow<String> = _translatedText
 
     // 翻译目标语言，保存在设置里
-    private val selectedTargetLanguage = MutableStateFlow(Locale.SIMPLIFIED_CHINESE)
-    val targetLanguage: StateFlow<Locale> = selectedTargetLanguage
-
-    init {
-        viewModelScope.launch {
-            settings.collect { current ->
-                selectedTargetLanguage.value = Locale.forLanguageTag(current.translateTargetLanguage)
-            }
-        }
-    }
+    val targetLanguage: StateFlow<Locale> = settings
+        .map { Locale.forLanguageTag(it.translateTargetLanguage) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, Locale.SIMPLIFIED_CHINESE)
 
     // 翻译历史，按时间倒序分页加载
     val history: Flow<PagingData<TranslationHistoryEntity>> = Pager(
@@ -81,7 +74,6 @@ class TranslatorVM(
     }
 
     fun updateTargetLanguage(language: Locale) {
-        selectedTargetLanguage.value = language
         updateSettings { it.copy(translateTargetLanguage = language.toLanguageTag()) }
     }
 

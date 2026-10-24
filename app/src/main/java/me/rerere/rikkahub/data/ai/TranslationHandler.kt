@@ -44,7 +44,7 @@ class TranslationHandler(
             // Use regular translation with prompt
             val prompt = settings.translatePrompt.applyPlaceholders(
                 "source_text" to sourceText,
-                "target_lang" to targetLanguage.getDisplayLanguage(Locale.ENGLISH),
+                "target_lang" to targetLanguage.toString(),
             )
 
             var messages = listOf(UIMessage.user(prompt))
